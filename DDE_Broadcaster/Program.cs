@@ -14,6 +14,16 @@ namespace DDE_Broadcaster
     {
         static void Main(string[] args)
         {
+            TCP_Server2 tcp_server = new TCP_Server2();
+            DDE_Client dde_client = new DDE_Client();
+
+            dde_client.Advise("$Second");
+
+            tcp_server.IncomeingTcpMessage += dde_client.OnIncomeingTcpMessage;
+
+           
+
         }
+
     }
 }

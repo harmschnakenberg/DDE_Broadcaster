@@ -1,6 +1,9 @@
-﻿using System;
+﻿using NDde.Client;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 
 namespace DDE_Broadcaster
@@ -11,122 +14,101 @@ namespace DDE_Broadcaster
         public static string DdeServerName { get; } = "view";
         public static string DdeTopic { get; } = "tagname";
         public static int DdeLoopTime { get; set; } = 1000;
+        public static readonly int UdpPort = 4201;
 
-        //public static string SyncRequest(string TagName)
-        //{
-        //    if (TagName.Length < 3)
-        //    {
-        //        return "TagName zu kurz.";
-        //    }
+        /// <summary>
+        /// Liste der TagNames, die gelsesen udn übertragen werden sollen.
+        /// </summary>
+        public List<string> TagNames = new List<string>();
 
-        //    try
-        //    { 
-        //        using (DdeClient client = new DdeClient(DdeServerName, DdeTopic))
-        //        {
-
-        //            client.Disconnected += OnDisconnected;
-
-        //            client.Connect();
-
-        //            // Syncronous Request Operation
-        //            return client.Request(TagName, 60000);
-        //        }
-        //    }
-        //    catch (Exception e)
-        //    {
-        //        Console.WriteLine(e.GetType().ToString() + "\r\n" + e.Message + "\r\n" + e.StackTrace + "\r\nTagName: " + TagName + "\r\n");
-        //        //Console.WriteLine("Press ENTER to quit...");
-        //        //Console.ReadLine();
-        //        return "FEHLER SyncRequest";
-        //    }
-        //}
-
-        //public static void DdeRequest(string TagName)
-        //{
-
-        //    try
-        //    {
-        //        // Create a client that connects to 'myapp|mytopic'. 
-        //        using (DdeClient client = new DdeClient(DdeServerName, DdeTopic))
-        //        {
-        //            // Subscribe to the Disconnected event.  This event will notify the application when a conversation has been terminated.
-        //            client.Disconnected += OnDisconnected;
-
-        //            // Connect to the server.  It must be running or an exception will be thrown.
-        //            client.Connect();
-
-        //            // Syncronous Request Operation
-        //            // string result = client.Request(TagName, 60000);
-
-
-        //            // Asynchronous Request Operation
-        //            client.BeginRequest(TagName, 1, OnRequestComplete, client);
-
-        //            //string result = "=>AsyncTest";
-
-        //            // return result;
-
-        //            // Wait for the user to press ENTER before proceding.
-        //            //Console.WriteLine("Press ENTER to quit...");
-        //            //Console.ReadLine();
-        //        }
-        //    }
-        //    catch (Exception e)
-        //    {
-        //        Console.WriteLine(e.GetType().ToString() + "\r\n" + e.Message + "\r\n" + e.StackTrace);
-        //        //Console.WriteLine("Press ENTER to quit...");
-        //        //Console.ReadLine();
-        //        //return null;
-        //    }
-
-        //}
-
-        public void DdeAdvise(string TagName)
+        public void OnIncomeingTcpMessage(object sender, TCP_Server2.IncomeingTcpMessageEventArgs args)
         {
+            Console.WriteLine("Something happened to " + sender);
+            Console.WriteLine("Empfangen: " + args.RecievedMessage);
+
+            // Erwarteter Aufbau dem empfangenen strings:
+            // +; für Advise
+            // -; für Remove
+            // z.B. +;A01_DB10_DBW6,$Hour,A01_DB22_DBX100
+
+            //ToDo:
+            //Bearbeite empfangenen String und erzeuge eine Liste.
+            //[...]
+
+            string recieved = args.RecievedMessage;
+
+            bool newTag = false; //true: Advise, false: Remove
+            if (recieved[0] == '+') newTag = true;
+
+            recieved = recieved.Remove(0, 2);
+
+            List<string> newTagNames = recieved.Split(',').ToList();
+            
+            //ToDo:
+            //Prüfen, ob alle Einträge gültige TagNames sind.
+
+            if (newTagNames.Count > 0)
+            {
+                foreach (string newTagName in newTagNames)
+                {
+                    if (newTag)
+                    {
+                        Advise(newTagName);
+                    }
+                    else
+                    {
+                        Remove(newTagName);
+                    }
+                }
+            }
+        }
+
+
+        public void Advise(string TagName)
+        {
+            if (TagNames.Contains(TagName)) return;
+
+            //ToDo: hier Prüfen, ob TagName gültig ist.
+            TagNames.Add(TagName);
 
             try
             {
-                DdeQueue.AddTag(TagName);
-
                 // Create a client that connects to 'myapp|mytopic'. 
-                using (DdeClient client = new DdeClient(DdeServerName, DdeTopic))
+                using (DdeClient dde_client = new DdeClient(DdeServerName, DdeTopic))
                 {
                     // Subscribe to the Disconnected event.  This event will notify the application when a conversation has been terminated.
-                    client.Disconnected += OnDisconnected;
+                    dde_client.Disconnected += OnDisconnected;
 
                     // Connect to the server.  It must be running or an exception will be thrown.
-                    client.Connect();
+                    dde_client.Connect();
 
                     //Lese den Wert initial von DDE Server:
-                    // Asynchronous Request Operation. 
-                    //client.BeginRequest(TagName, 1, OnRequestComplete, client);
-                    DdeQueue.DdeDict[TagName] = client.Request(TagName, 60000);
+                    string TagValue = dde_client.Request(TagName, 60000);                    
+                    UdpSend(TagName, TagValue);
 
                     //Lese den Wert von DDE Server neu ein bei Wertänderung.
                     // Advise Loop.
-                    client.StartAdvise(TagName, 1, true, 60000);
-                    /// client.Advise += OnAdvise;
-                    client.Advise += OnAdvise2;
+                    dde_client.StartAdvise(TagName, 1, true, 60000);
 
-                    while (DdeQueue.DdeDict.ContainsKey(TagName))
+                    dde_client.Advise += OnAdvise2;
+
+                    while (TagNames.Contains(TagName))
                     {
                         System.Threading.Thread.Sleep(DdeLoopTime);
                     }
-                    Console.WriteLine("Advise beendet für " + TagName);
-
                 }
             }
             catch (Exception e)
             {
                 Console.WriteLine(e.GetType().ToString() + "\r\n" + e.Message + "\r\n" + e.StackTrace);
-                //Console.WriteLine("Press ENTER to quit...");
-                //Console.ReadLine();
-                //return null;
             }
 
         }
 
-
+        public void Remove(string TagName)
+        {
+            TagNames.Remove(TagName);
+        }
 
         #region Events
 
@@ -165,8 +147,7 @@ namespace DDE_Broadcaster
                 DdeClient client = (DdeClient)ar.AsyncState;
                 byte[] data = client.EndRequest(ar);
 
-                Console.WriteLine("OnRequestComplete: " + Encoding.ASCII.GetString(data));
-                GrapeVine.ResultTest = Encoding.ASCII.GetString(data);
+                Console.WriteLine("OnRequestComplete: " + Encoding.ASCII.GetString(data));         
             }
             catch (Exception e)
             {
@@ -202,18 +183,12 @@ namespace DDE_Broadcaster
             }
         }
 
-        //private static void OnAdvise(object sender, DdeAdviseEventArgs args)
-        //{
-        //    Console.WriteLine("OnAdvise: "+ args.Item + " - "  + args.Text);
-        //    DdeQueue.DdeDict[args.Item] = args.Text;
-        //}
-
         private void OnAdvise2(object sender, DdeAdviseEventArgs args)
         {
-            Console.WriteLine("OnAdvise: " + args.Item + " - " + args.Text);
-            DdeQueue.DdeDict[args.Item] = args.Text;
-        }
+            Console.WriteLine("OnAdvise2: " + args.Item + " - " + args.Text);
 
+            UdpSend(args.Item, args.Text);
+        }
 
         private static void OnDisconnected(object sender, DdeDisconnectedEventArgs args)
         {
@@ -227,6 +202,28 @@ namespace DDE_Broadcaster
         #endregion
 
 
+        internal void UdpSend(string TagName, string TagValue)
+        {
+            try
+            {
+                // Generiere einen EndPoint mit einer Loopback-Adresse
+                IPEndPoint remoteIPEndPoint = new IPEndPoint(IPAddress.Loopback, UdpPort);
 
+                // Instanziere UdpClient
+                UdpClient sender = new UdpClient();
+
+                string payload = TagName + "=" + TagValue;
+                byte[] sendPacket = Encoding.UTF8.GetBytes(payload);
+
+                Console.WriteLine("Sende per UDP: " + payload);
+                sender.Send(sendPacket, sendPacket.Length, remoteIPEndPoint);
+
+                sender.Close();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+        }
     }
 }
